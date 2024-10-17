@@ -1,7 +1,9 @@
+import os
 from nba_api.stats.static import teams as nba_teams
 from nba_api.stats.endpoints import teamplayerdashboard
 from ariadne import gql, QueryType, make_executable_schema, ObjectType
 from ariadne.asgi import GraphQL
+from pymongo import MongoClient
 
 type_defs = gql("""
     type Team {
@@ -25,6 +27,13 @@ type_defs = gql("""
 
 query = QueryType()
 
+# MongoDB connection setup
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "nba_db")
+client = MongoClient(MONGO_URI)
+db = client[MONGO_DB_NAME]
+players_collection = db["players"]
+teams_collection = db["teams"]
 
 @query.field("team")
 def resolve_team(*_, abrv: str):
@@ -34,6 +43,19 @@ def resolve_team(*_, abrv: str):
 @query.field("teams")
 def resolve_teams(*_):
     teams = nba_teams.get_teams()
+    
+    # Upload team data to MongoDB
+    for team in teams:
+        teams_collection.update_one(
+            {"id": team["id"]},
+            {"$set": {
+                "id": team["id"],
+                "full_name": team["full_name"],
+                "abbreviation": team["abbreviation"]
+            }},
+            upsert=True
+        )
+    
     return teams
 
 
@@ -47,6 +69,18 @@ def resolve_players(team, *_):
     )
 
     players = endpoint.get_data_frames()[1][["PLAYER_ID", "PLAYER_NAME", "GP"]].to_dict('records')
+    
+    # Upload player data to MongoDB
+    for player in players:
+        players_collection.update_one(
+            {"id": player["PLAYER_ID"]},
+            {"$set": {
+                "id": player["PLAYER_ID"],
+                "name": player["PLAYER_NAME"],
+                "gp": player["GP"]
+            }},
+            upsert=True
+        )
     
     return list(map(lambda x: {
         "id": x["PLAYER_ID"],
